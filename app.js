@@ -2,7 +2,7 @@
 /* =========================================================
    Controle de Gastos — PWA com Google Planilhas
    ========================================================= */
-const VERSAO = '2.0';
+const VERSAO = '2.1';
 const TITULO_PLANILHA = 'Controle de Gastos';
 const HEAD = ['ID', 'Data', 'Tipo', 'Categoria', 'Item', 'Descrição', 'Valor', 'Forma', 'Cartão', 'Parcela', 'Grupo', 'Fixa', 'Chave'];
 const FORMAS = ['Dinheiro', 'Débito', 'Pix', 'Crédito'];
@@ -39,6 +39,7 @@ const ICONS = {
   espera: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   teste: '<path d="M9 3h6M10 3v6L4.5 19a1.5 1.5 0 0 0 1.3 2h12.4a1.5 1.5 0 0 0 1.3-2L14 9V3"/><path d="M7 15h10"/>',
   planilha: '<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 9v12"/>',
+  baixar: '<path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v3h16v-3"/>',
   sino: '<path d="M6 9a6 6 0 0 1 12 0c0 6 2.5 8 2.5 8h-17S6 15 6 9z"/><path d="M10 20.5a2 2 0 0 0 4 0"/>',
   sol: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   lua: '<path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/>',
@@ -181,6 +182,33 @@ async function ponte(acao, dados = {}) {
   if (!r.ok || !j) throw new Error('A planilha não respondeu. Confira se o recebedor foi publicado para "Qualquer pessoa".');
   if (j.erro) throw new Error('Planilha: ' + j.erro);
   return j;
+}
+
+/* =========================================================
+   INSTALAR O APP NO CELULAR
+   ========================================================= */
+let pedidoInstalar = null;
+const appInstalado = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); pedidoInstalar = e; if (S.tab === 'ajustes' || !S.cfg) render(); });
+window.addEventListener('appinstalled', () => { pedidoInstalar = null; toast('App instalado ✓ Procure o ícone Gastos na tela do celular.'); render(); });
+function blocoInstalar() {
+  if (appInstalado()) return `<h2>App no celular</h2><div class="card pad">${svgIc('ok')} Você já está usando o app instalado.</div>`;
+  return `<h2>App no celular</h2><div class="card pad"><p style="margin:0 0 4px">Coloque o ícone do app na tela inicial para abrir com um toque.</p>
+    <button class="btn pri" data-a="instalar">${svgIc('baixar')} Instalar app no celular</button></div>`;
+}
+async function instalarApp() {
+  if (appInstalado()) return toast('O app já está instalado ✓');
+  if (pedidoInstalar) {
+    const p = pedidoInstalar; pedidoInstalar = null;
+    p.prompt();
+    try { const r = await p.userChoice; if (r && r.outcome === 'dismissed') toast('Instalação cancelada.'); } catch (e) {}
+    return;
+  }
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  await perguntar('Instalar o app', ios
+    ? 'No Safari, toque no botão <b>Compartilhar</b> (quadrado com seta) e escolha <b>Adicionar à Tela de Início</b>.'
+    : 'No Chrome, toque nos <b>três pontinhos ⋮</b> no canto de cima e escolha <b>Instalar app</b> ou <b>Adicionar à tela inicial</b>.<br><br>Se o Chrome disser que o app <b>já está instalado</b>: segure o dedo no ícone antigo <b>Gastos</b> na tela do celular, toque em <b>Desinstalar</b>, feche o Chrome e abra este link de novo.',
+    [['ok', 'Entendi']]);
 }
 
 /* =========================================================
@@ -513,6 +541,7 @@ function telaAjustes() {
       <button class="btn" data-a="sync">${svgIc('sync')} Sincronizar agora</button>
       <button class="btn dng" data-a="sair">Desligar este aparelho da planilha</button></div>`;
   }
+  h += blocoInstalar();
   h += `<p class="nota" style="text-align:center;margin:24px 0">Controle de Gastos · versão ${VERSAO}</p>`;
   return h;
 }
@@ -526,6 +555,7 @@ function renderBoasVindas() {
     <button class="btn pri" data-a="ligar">Ligar à planilha</button>
     <p class="nota">Não precisa entrar com conta Google: o app grava direto na sua planilha.</p>
     <button class="btn" data-a="demo">${svgIc('teste')} Experimentar sem planilha (modo de teste)</button>`;
+  if (!appInstalado()) h += `<button class="btn lnk" data-a="instalar">${svgIc('baixar')} Instalar app no celular</button>`;
   h += `</div>`;
   app.innerHTML = h;
 }
@@ -1040,6 +1070,7 @@ document.addEventListener('click', async ev => {
       case 'k-excluir': await excluirCategoria(); break;
       case 'tema': ls.set('gx_tema', v); aplicarTema(); render(); break;
       case 'notif': await ativarNotificacoes(); break;
+      case 'instalar': await instalarApp(); break;
       case 'ligar': await ligar((S.urlTmp || '').trim()); break;
       case 'demo': entrarDemo(); break;
       case 'sair-demo': await sairDemo(); break;

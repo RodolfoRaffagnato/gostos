@@ -1,5 +1,5 @@
 /* Service worker: funciona offline e mostra lembretes de contas pendentes */
-const V = 'gastos-v3';
+const V = 'gastos-v4';
 const ARQ = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
