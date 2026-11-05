@@ -2,7 +2,7 @@
 /* =========================================================
    Controle de Gastos — PWA com Google Planilhas
    ========================================================= */
-const VERSAO = '2.1';
+const VERSAO = '2.2';
 const TITULO_PLANILHA = 'Controle de Gastos';
 const HEAD = ['ID', 'Data', 'Tipo', 'Categoria', 'Item', 'Descrição', 'Valor', 'Forma', 'Cartão', 'Parcela', 'Grupo', 'Fixa', 'Chave'];
 const FORMAS = ['Dinheiro', 'Débito', 'Pix', 'Crédito'];
@@ -134,6 +134,10 @@ function normalizarCfg(c) {
   }
   return c;
 }
+// conta fixa: sem valor (aguardando a conta) → a pagar (valor lançado) → paga
+const semValor = r => r.fixa === 'conta' && r.valor == null;
+const aPagar = r => r.fixa === 'conta' && r.valor != null && r.pago === false;
+const naoPaga = r => semValor(r) || aPagar(r);
 const valorVigente = (hist, m) => { let v = null; (hist || []).slice().sort((a, b) => a.de < b.de ? -1 : 1).forEach(h => { if (h.de <= m) v = h.v; }); return v; };
 const definirDaqui = (hist, m, v) => { const h = (hist || []).filter(x => x.de < m); h.push({ de: m, v }); return h; };
 const entradaAtiva = (e, m) => valorVigente(e.hist, m) != null && (!e.fim || m < e.fim);
@@ -234,7 +238,7 @@ async function empurrarCfg() {
 function rowToSheet(r) {
   return [r.id, r.data, r.tipo === 'entrada' ? 'Entrada' : 'Saída', r.cat || '', r.sub || '', r.desc || '',
     r.valor == null ? '' : r.valor / 100, r.forma || '', r.cartao || '', r.parcela || '', r.grupo || '',
-    r.fixa === 'conta' ? 'Conta fixa' : r.fixa === 'entrada' ? 'Entrada fixa' : '', r.chave || ''];
+    r.fixa === 'conta' ? (semValor(r) ? 'Conta fixa · sem valor' : aPagar(r) ? 'Conta fixa · a pagar' : 'Conta fixa · paga') : r.fixa === 'entrada' ? 'Entrada fixa' : '', r.chave || ''];
 }
 function paraCentavos(v) {
   if (v === '' || v == null) return null;
@@ -257,7 +261,8 @@ function sheetToRow(a, m) {
     id: String(g(0)) || uid(), data: paraData(g(1), m), tipo: /entrada/i.test(g(2)) ? 'entrada' : 'saida',
     cat: String(g(3)), sub: String(g(4)), desc: String(g(5)), valor: paraCentavos(g(6)), forma: String(g(7)),
     cartao: String(g(8)), parcela: String(g(9)), grupo: String(g(10)),
-    fixa: /conta/i.test(fx) ? 'conta' : /entrada/i.test(fx) ? 'entrada' : '', chave: String(g(12))
+    fixa: /conta/i.test(fx) ? 'conta' : /entrada/i.test(fx) ? 'entrada' : '', chave: String(g(12)),
+    pago: !/a pagar/i.test(fx)
   };
 }
 async function puxarMes(m) {
@@ -376,10 +381,10 @@ async function aplicarDepois(m, fn) {
 function resumo(m) {
   const rows = linhasDe(m);
   const ent = rows.filter(r => r.tipo === 'entrada' && r.valor != null);
-  const sai = rows.filter(r => r.tipo === 'saida' && r.valor != null);
-  const pend = rows.filter(r => r.fixa === 'conta' && r.valor == null);
+  const sai = rows.filter(r => r.tipo === 'saida' && r.valor != null && !aPagar(r));
+  const pend = rows.filter(naoPaga);
   const totE = ent.reduce((a, r) => a + r.valor, 0), totS = sai.reduce((a, r) => a + r.valor, 0);
-  const previsto = pend.reduce((a, r) => a + (valorVigente(S.cfg.fixos[r.chave], m) || 0), 0);
+  const previsto = pend.reduce((a, r) => a + (r.valor != null ? r.valor : (valorVigente(S.cfg.fixos[r.chave], m) || 0)), 0);
   const porCat = {}, porCartao = {}, porForma = {};
   sai.forEach(r => {
     const cn = ALIAS[r.cat] || r.cat || 'Outros'; porCat[cn] = (porCat[cn] || 0) + r.valor;
@@ -388,7 +393,7 @@ function resumo(m) {
   });
   return { ent, sai, pend, totE, totS, sobra: totE - totS, previsto, porCat, porCartao, porForma };
 }
-const pendentesMesAtual = () => linhasDe(mesAtual()).filter(r => r.fixa === 'conta' && r.valor == null);
+const pendentesMesAtual = () => linhasDe(mesAtual()).filter(naoPaga);
 const nomeLinha = r => r.tipo === 'entrada' ? (r.desc || 'Entrada') : (r.cat + (r.sub ? ' · ' + r.sub : ''));
 
 /* =========================================================
@@ -447,9 +452,10 @@ function itemLinha(r) {
     const titulo = r.sub || r.cat;
     const sub = r.sub ? r.cat : 'Conta fixa';
     let val;
-    if (r.valor == null) { const sg = valorVigente(S.cfg.fixos[r.chave], m); val = `<span class="val pend">Pendente${sg != null ? `<small>previsto ${fmt(sg)}</small>` : ''}</span>`; }
-    else val = `<span class="val">${fmt(r.valor)}</span>`;
-    const det = r.valor == null ? esc(sub) : esc(sub) + ' · ' + formaHtml(r);
+    if (semValor(r)) { const sg = valorVigente(S.cfg.fixos[r.chave], m); val = `<span class="val pend">Falta o valor${sg != null ? `<small>previsto ${fmt(sg)}</small>` : ''}</span>`; }
+    else if (aPagar(r)) val = `<span class="val apagar"><b>${fmt(r.valor)}</b><small>A pagar</small></span>`;
+    else val = `<span class="val pago"><b>${fmt(r.valor)}</b><small>${svgIc('ok')}Paga</small></span>`;
+    const det = naoPaga(r) ? esc(sub) : esc(sub) + ' · ' + formaHtml(r);
     return `<button class="item" data-a="editar" data-id="${r.id}">${ic}<span class="tx"><b>${esc(titulo)}</b><small>${det}</small></span>${val}</button>`;
   }
   const titulo = r.cat + (r.sub ? ' · ' + r.sub : '');
@@ -475,10 +481,10 @@ function telaLancar() {
   const ordemCat = n => { const i = S.cfg.categorias.findIndex(k => k.nome === n); return i < 0 ? 999 : i; };
   fixas.sort((a, b) => ordemCat(a.cat) - ordemCat(b.cat) || subIdx(a) - subIdx(b));
   const gastos = rows.filter(r => r.tipo === 'saida' && r.fixa !== 'conta').sort((a, b) => a.data < b.data ? 1 : a.data > b.data ? -1 : 0);
-  const pend = fixas.filter(r => r.valor == null).length;
+  const pend = fixas.filter(naoPaga).length;
   let h = topo() + painel(m);
   if (m > mesAtual() && !fixas.length) h += `<div class="banner info"><span>Mês futuro: aqui aparecem só as parcelas. As contas fixas entram quando o mês chegar.</span></div>`;
-  if (fixas.length) h += `<h2 id="fixas">Contas fixas <span class="${pend ? 'pill-pend' : 'pill-ok'}">${pend ? `${pend} pendente${pend > 1 ? 's' : ''}` : 'todas pagas ✓'}</span></h2><div class="card">${fixas.map(itemLinha).join('')}</div>`;
+  if (fixas.length) h += `<h2 id="fixas">Contas fixas <span class="${pend ? 'pill-pend' : 'pill-ok'}">${pend ? `${pend} a pagar` : 'todas pagas ✓'}</span></h2><div class="card">${fixas.map(itemLinha).join('')}</div>`;
   h += `<h2>Gastos do mês</h2><div class="card">${gastos.length ? gastos.map(itemLinha).join('') : '<div class="vazio">Nenhum gasto ainda.<br>Toque em <b>Lançar gasto</b>.</div>'}</div>`;
   h += `<button class="fab" data-a="novo-gasto">${svgIc('mais')}<span>Lançar gasto</span></button>`;
   return h;
@@ -489,7 +495,7 @@ function telaResumo() {
   const m = S.mes; const R = resumo(m);
   let h = topo();
   h += painel(m, true);
-  if (R.pend.length) h += `<div class="banner"><span>Faltam ${R.pend.length} ${R.pend.length === 1 ? 'conta fixa' : 'contas fixas'}${R.previsto ? ` (previsto ${fmt(R.previsto)}). Depois de pagar, sobraria ${fmt(R.sobra - R.previsto)}` : ''}.</span></div>`;
+  if (R.pend.length) h += `<div class="banner"><span>Faltam pagar ${R.pend.length} ${R.pend.length === 1 ? 'conta fixa' : 'contas fixas'}${R.previsto ? ` (previsto ${fmt(R.previsto)}). Depois de pagar, sobraria ${fmt(R.sobra - R.previsto)}` : ''}.</span></div>`;
   h += `<h2>Entradas</h2><div class="card">${linhasDe(m).filter(r => r.tipo === 'entrada').map(itemLinha).join('') || '<div class="vazio">Nenhuma entrada neste mês.</div>'}</div>
     <button class="btn" data-a="nova-entrada">${svgIc('mais')} Adicionar entrada</button>`;
   const nomesCat = S.cfg.categorias.map(k => k.nome); Object.keys(R.porCat).forEach(n => { if (!nomesCat.includes(n)) nomesCat.push(n); });
@@ -572,7 +578,7 @@ function abrirGasto(row) {
     const c = cartaoPorNome(row.cartao);
     S.form = { id: row.id, m, catId: k ? k.id : '', subId: s ? s.id : '', valor: row.valor || 0, forma: row.forma || '', cartaoId: c ? c.id : '',
       modo: 'vista', n: 2, desc: row.desc || '', data: row.data || dataPadrao(m), fixa: row.fixa, chave: row.chave, parcela: row.parcela, grupo: row.grupo,
-      catNome: row.cat, subNome: row.sub, cartaoNome: row.cartao, pendente: row.valor == null };
+      catNome: row.cat, subNome: row.sub, cartaoNome: row.cartao, pendente: row.valor == null, naoPaga: naoPaga(row), aPagar: aPagar(row) };
     if (row.fixa === 'conta' && row.valor == null) { const sg = valorVigente(S.cfg.fixos[row.chave], m); if (sg != null) S.form.valor = sg; }
   } else {
     S.form = { id: null, m, catId: '', subId: '', valor: 0, forma: '', cartaoId: '', modo: 'vista', n: 2, desc: '', data: dataPadrao(m), fixa: '' };
@@ -602,7 +608,8 @@ function modalGasto() {
   if (ehFixa) h += `<div class="fixa-t">${icCat(cat)}<div><b>${esc(f.subNome || f.catNome)}</b><small>${esc(f.subNome ? f.catNome : 'Conta fixa')} · ${nomeMes(f.m)}</small></div></div>`;
   // 1º valor
   h += `<label class="lb">${!f.id && f.forma === 'Crédito' && f.modo === 'parc' ? 'Valor total da compra' : ehParcela ? 'Valor desta parcela' : 'Valor'}</label>${campoValor(f.valor)}`;
-  if (ehFixa && f.pendente) { const sg = valorVigente(c.fixos[f.chave], f.m); h += `<p class="nota">${sg != null ? 'Já preenchido com o valor previsto. Altere se veio diferente.' : 'Digite o valor que veio este mês.'}</p>`; }
+  if (ehFixa && f.pendente) { const sg = valorVigente(c.fixos[f.chave], f.m); h += `<p class="nota">${sg != null ? 'Já preenchido com o valor previsto. Altere se a conta veio diferente.' : 'Digite o valor que veio na conta.'}</p>`; }
+  if (ehFixa) h += `<div class="situacao ${f.naoPaga ? 'apagar' : 'pago'}">${f.naoPaga ? (f.aPagar ? 'Situação: <b>a pagar</b>' : 'Situação: <b>aguardando o valor</b>') : `Situação: <b>paga</b>`}</div>`;
   // 2º categoria (só as variáveis; contas fixas são preenchidas na lista)
   if (!ehFixa) {
     const ks = c.categorias.filter(k => k.tipo === 'variavel' || k.id === f.catId);
@@ -615,7 +622,7 @@ function modalGasto() {
   if (ehParcela) {
     h += `<label class="lb">Cartão · parcela ${esc(f.parcela)}</label>${chipsCartao(f)}`;
   } else {
-    h += `<label class="lb">Forma de pagamento</label><div class="g4">${FORMAS.map(x => `<button class="opt forma ${f.forma === x ? 'sel' : ''}" style="--c:${FORMA_INFO[x][1]}" data-a="f-forma" data-v="${x}">${bolinha(FORMA_INFO[x][0], FORMA_INFO[x][1], 'sm')}${x}</button>`).join('')}</div>`;
+    h += `<label class="lb">Forma de pagamento${ehFixa && f.naoPaga ? ' <span class="opc">(escolha quando pagar)</span>' : ''}</label><div class="g4">${FORMAS.map(x => `<button class="opt forma ${f.forma === x ? 'sel' : ''}" style="--c:${FORMA_INFO[x][1]}" data-a="f-forma" data-v="${x}">${bolinha(FORMA_INFO[x][0], FORMA_INFO[x][1], 'sm')}${x}</button>`).join('')}</div>`;
     if (f.forma === 'Crédito') {
       h += `<label class="lb">Cartão</label>${chipsCartao(f)}`;
       if (!f.id) {
@@ -629,9 +636,14 @@ function modalGasto() {
   }
   h += `<label class="lb" for="fdesc">Descrição (opcional)</label><input class="inp" id="fdesc" data-i="desc" value="${esc(f.desc)}" placeholder="Ex.: farmácia do centro">`;
   if (!ehFixa) h += `<label class="lb" for="fdata">Data</label><input class="inp" id="fdata" type="date" data-i="data" value="${esc(f.data)}" min="${f.m}-01" max="${f.m}-${pad2(diasNoMes(f.m))}">`;
-  h += `<button class="btn pri" data-a="f-salvar">${ehFixa && f.pendente ? svgIc('ok') + ' Marcar como paga' : 'Salvar'}</button>`;
+  if (ehFixa && f.naoPaga) {
+    h += `<button class="btn pri" data-a="f-salvar">${svgIc('ok')} Já paguei</button>
+      <button class="btn apagar" data-a="f-apagar">${svgIc('espera')} Salvar como a pagar</button>
+      <p class="nota">Ainda não pagou? Salve como <b>a pagar</b>. Quando pagar, abra a conta e toque em <b>Já paguei</b>.</p>`;
+  } else h += `<button class="btn pri" data-a="f-salvar">Salvar</button>`;
   if (f.id) {
-    if (ehFixa && !f.pendente) h += `<button class="btn" data-a="f-pendente">Voltar para pendente</button>`;
+    if (ehFixa && !f.naoPaga) h += `<button class="btn" data-a="f-desmarcar">Desmarcar pagamento (voltar para a pagar)</button>`;
+    if (ehFixa && f.aPagar) h += `<button class="btn" data-a="f-pendente">Apagar o valor</button>`;
     h += `<button class="btn dng" data-a="f-excluir">${ehFixa ? 'Remover deste mês' : 'Excluir'}</button>`;
   }
   return h;
@@ -658,16 +670,17 @@ function responder(v) { const a = S.ask; S.ask = null; document.getElementById('
 const MES_OU_PROX = [['mes', 'Só este mês'], ['prox', 'Este e os próximos meses']];
 
 /* ---------- salvar gasto ---------- */
-async function salvarGasto() {
+async function salvarGasto(modo = 'pago') {
   const f = S.form; const c = S.cfg; const m = f.m;
+  const soAPagar = f.fixa === 'conta' && modo === 'apagar';
   const cat = catPorId(f.catId);
   if (f.fixa !== 'conta') {
     if (!cat) return toast('Escolha a categoria');
     if (cat.tipo === 'fixa' && cat.subs.length && !f.subId) return toast('Escolha o item');
   }
   if (!f.valor) return toast('Digite o valor');
-  if (!f.grupo && !f.forma) return toast('Escolha a forma de pagamento');
-  if ((f.forma === 'Crédito' || f.grupo) && !f.cartaoId) return toast('Escolha o cartão');
+  if (!soAPagar && !f.grupo && !f.forma) return toast('Escolha a forma de pagamento');
+  if (!soAPagar && (f.forma === 'Crédito' || f.grupo) && !f.cartaoId) return toast('Escolha o cartão');
   const sub = cat ? cat.subs.find(s => s.id === f.subId) : null;
   const cartao = c.cartoes.find(x => x.id === f.cartaoId);
   const forma = f.grupo ? 'Crédito' : f.forma;
@@ -694,7 +707,8 @@ async function salvarGasto() {
     if (r.fixa === 'conta') {
       if (!(await valorFixo(r, f.valor, m))) return;
       Object.assign(r, campos);
-      if (f.pendente && r.data === m + '-01' && hoje().slice(0, 7) === m) r.data = hoje();
+      r.pago = !soAPagar;
+      if (f.naoPaga && r.pago && r.data === m + '-01' && hoje().slice(0, 7) === m) r.data = hoje();
       setLinhas(m, rows); marcar(m);
     } else if (r.grupo) {
       const mudou = r.valor !== f.valor || r.cat !== campos.cat || r.sub !== campos.sub || r.cartao !== campos.cartao || r.desc !== campos.desc;
@@ -717,7 +731,7 @@ async function salvarGasto() {
       Object.assign(r, campos, { valor: f.valor }); setLinhas(m, rows); marcar(m);
     }
   }
-  fecharModal(); render(); toast('Salvo ✓'); persistir(); atualizarLembrete();
+  fecharModal(); render(); toast(soAPagar ? 'Salva como a pagar' : f.fixa === 'conta' && f.naoPaga ? 'Conta paga ✓' : 'Salvo ✓'); persistir(); atualizarLembrete();
 }
 async function valorFixo(row, novo, m) {
   const hist = S.cfg.fixos[row.chave]; const sg = valorVigente(hist, m);
@@ -766,8 +780,13 @@ async function excluirGasto() {
 }
 function voltarPendente() {
   const f = S.form; const rows = linhasDe(f.m).slice(); const r = rows.find(x => x.id === f.id);
-  if (r) { r.valor = null; r.forma = ''; r.cartao = ''; setLinhas(f.m, rows); marcar(f.m); }
+  if (r) { r.valor = null; r.forma = ''; r.cartao = ''; r.pago = true; r.data = f.m + '-01'; setLinhas(f.m, rows); marcar(f.m); }
   fecharModal(); render(); persistir(); atualizarLembrete();
+}
+function desmarcarPago() {
+  const f = S.form; const rows = linhasDe(f.m).slice(); const r = rows.find(x => x.id === f.id);
+  if (r) { r.pago = false; r.forma = ''; r.cartao = ''; r.data = f.m + '-01'; setLinhas(f.m, rows); marcar(f.m); }
+  fecharModal(); render(); toast('Voltou para a pagar'); persistir(); atualizarLembrete();
 }
 
 /* =========================================================
@@ -969,7 +988,7 @@ async function excluirCategoria() {
    ========================================================= */
 async function atualizarLembrete() {
   const m = mesAtual(); const rows = S.meses[m]; if (!rows) return;
-  const pend = rows.filter(r => r.fixa === 'conta' && r.valor == null);
+  const pend = rows.filter(naoPaga);
   try {
     const c = await caches.open('gx-dados');
     await c.put(new URL('__lembrete', document.baseURI).href, new Response(JSON.stringify({ mes: m, n: pend.length, itens: pend.map(nomeLinha).slice(0, 6) })));
@@ -983,7 +1002,7 @@ async function notificarSePendente() {
   ls.set('gx_notif_dia', hoje());
   try {
     const reg = await navigator.serviceWorker.ready;
-    reg.showNotification('Contas fixas pendentes', { body: `${pend.length} pendente(s): ${pend.slice(0, 4).map(nomeLinha).join(', ')}`, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'pendentes' });
+    reg.showNotification('Contas a pagar', { body: `${pend.length} a pagar: ${pend.slice(0, 4).map(nomeLinha).join(', ')}`, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'pendentes' });
   } catch (e) {}
 }
 async function ativarNotificacoes() {
@@ -1052,6 +1071,8 @@ document.addEventListener('click', async ev => {
       case 'f-salvar': await salvarGasto(); break;
       case 'f-excluir': await excluirGasto(); break;
       case 'f-pendente': voltarPendente(); break;
+      case 'f-apagar': await salvarGasto('apagar'); break;
+      case 'f-desmarcar': desmarcarPago(); break;
       case 'e-salvar': await salvarEntrada(); break;
       case 'e-excluir': await excluirEntrada(); break;
       case 'ef': { const e = S.cfg.entradasFixas.find(x => x.id === id); const m = mesAtual(); S.form = { id, m, desc: e.nome, valor: valorVigente(e.hist, m) ?? e.hist[e.hist.length - 1].v, fim: e.fim && e.fim <= m ? e.fim : null }; S.modal = 'ef'; renderModal(); break; }

@@ -1,5 +1,5 @@
 /* Service worker: funciona offline e mostra lembretes de contas pendentes */
-const V = 'gastos-v4';
+const V = 'gastos-v5';
 const ARQ = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
@@ -29,8 +29,8 @@ async function lembrar() {
     const now = new Date(); const mes = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
     let body = '';
     if (d.mes < mes) body = 'Mês novo! Abra o app para preencher as contas fixas.';
-    else if (d.n > 0) body = `${d.n} pendente(s): ${d.itens.join(', ')}`;
-    if (body) await self.registration.showNotification('Contas fixas pendentes', { body, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'pendentes' });
+    else if (d.n > 0) body = `${d.n} a pagar: ${d.itens.join(', ')}`;
+    if (body) await self.registration.showNotification('Contas a pagar', { body, icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: 'pendentes' });
   } catch (e) {}
 }
 self.addEventListener('periodicsync', e => { if (e.tag === 'lembrete') e.waitUntil(lembrar()); });
